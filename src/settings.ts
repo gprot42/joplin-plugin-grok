@@ -108,7 +108,7 @@ export async function registerSettings(): Promise<void> {
 		label: 'Joplin Grok AI',
 		iconName: 'fas fa-robot',
 		description:
-			'Connect Grok (xAI) or any OpenAI-compatible LLM to your notes. Use “Exclude notebook / subnotebook” to pick from a full list.',
+			'Connect Grok (xAI) or any OpenAI-compatible LLM to your notes. Privacy: note titles and content the assistant reads are sent to your configured AI provider — exclude private notebooks before use.',
 	});
 
 	const blockedRaw = String(

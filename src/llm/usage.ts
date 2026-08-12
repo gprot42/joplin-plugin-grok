@@ -225,68 +225,64 @@ export async function resetLifetimeUsage(): Promise<void> {
 }
 
 export function formatTokens(n: number): string {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-	if (n >= 10_000) return `${Math.round(n / 1000)}k`;
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(Math.round(n));
+	const v = Math.round(n);
+	if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+	// Prefer full count with commas under 100k so cost context is readable
+	if (v >= 100_000) return `${Math.round(v / 1000)}k`;
+	return v.toLocaleString('en-US');
 }
 
 export function formatUsd(n: number): string {
-	if (n < 0.0001 && n > 0) return '<$0.0001';
+	if (n <= 0) return '$0.00';
+	if (n < 0.0001) return '<$0.0001';
 	if (n < 0.01) return `$${n.toFixed(4)}`;
 	if (n < 1) return `$${n.toFixed(3)}`;
 	return `$${n.toFixed(2)}`;
 }
 
-/** One-line muted footer for chat (not prominent). */
+/**
+ * Compact footer under chat replies: cost + total tokens only.
+ */
 export function formatUsageFooter(
 	rec: UsageRecord | null,
 	session: UsageTotals,
-	authMode: string
+	_authMode: string
 ): string {
 	if (!rec && session.calls === 0) return '';
-	const parts: string[] = [];
-	if (rec) {
-		parts.push(`this turn ${formatTokens(rec.total_tokens)} tok`);
-		if (authMode === 'api_key') {
-			parts.push(`~${formatUsd(rec.estimated_usd)}`);
-		} else {
-			parts.push(`~${formatUsd(rec.estimated_usd)} est.`);
-		}
-	}
-	if (session.calls > 0) {
-		parts.push(
-			`session ${formatTokens(session.total_tokens)} tok · ${formatUsd(session.estimated_usd)}${
-				authMode === 'super_grok' ? ' est.' : ''
-			}`
-		);
-	}
-	return parts.length ? `Usage · ${parts.join(' · ')}` : '';
+
+	// Prefer this-reply numbers; fall back to session if no per-call record
+	const usd = rec ? rec.estimated_usd : session.estimated_usd;
+	const tokens = rec ? rec.total_tokens : session.total_tokens;
+	return `${formatUsd(usd)} · ${formatTokens(tokens)} tokens`;
 }
 
 export function formatUsageReport(state: UsageState, authMode: string, model: string): string {
 	const rate = rateForModel(model);
-	const subNote =
+	const billingNote =
 		authMode === 'super_grok'
-			? '\n\nAuth: SuperGrok OAuth — token counts are from the API; USD is an estimate at published API list rates and may not match SuperGrok subscription billing.'
-			: '\n\nAuth: API key — USD estimate uses published xAI list rates (short context).';
+			? 'Billing mode: SuperGrok OAuth\n' +
+				'Token counts come from the API response.\n' +
+				'USD is estimated from published API list rates and may not match SuperGrok subscription billing.'
+			: 'Billing mode: API key (console credits)\n' +
+				'USD is estimated from published xAI list rates (short-context tier).';
 
-	const line = (label: string, t: UsageTotals) =>
+	const block = (label: string, t: UsageTotals) =>
 		`${label}\n` +
-		`  Calls: ${t.calls}\n` +
+		`  Estimated cost: ${formatUsd(t.estimated_usd)}\n` +
 		`  Tokens: ${formatTokens(t.total_tokens)} total` +
-		` (${formatTokens(t.prompt_tokens)} in / ${formatTokens(t.completion_tokens)} out)\n` +
-		`  Est. USD: ${formatUsd(t.estimated_usd)}`;
+		`  (${formatTokens(t.prompt_tokens)} input + ${formatTokens(t.completion_tokens)} output)\n` +
+		`  API calls: ${t.calls}`;
 
 	const rates =
-		`List rates used for ${model || 'default'}: ` +
-		`$${rate.input}/1M in · $${rate.output}/1M out`;
+		`Rate table used for “${model || 'default'}”:\n` +
+		`  Input  ${formatUsd(rate.input)} per 1M tokens\n` +
+		`  Output ${formatUsd(rate.output)} per 1M tokens`;
 
 	return (
-		`Grok usage (plugin-local)\n\n` +
-		`${line('This session', state.session)}\n\n` +
-		`${line('Lifetime (this device)', state.lifetime)}\n\n` +
-		rates +
-		subNote
+		`Grok usage (tracked on this device only)\n\n` +
+		`${block('This Joplin session', state.session)}\n\n` +
+		`${block('Lifetime (since last reset)', state.lifetime)}\n\n` +
+		`${rates}\n\n` +
+		billingNote
 	);
 }

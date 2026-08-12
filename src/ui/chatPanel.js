@@ -45,6 +45,12 @@
 			'Ask about your notes, add content with smart placement, or summarize the current note.' +
 			'<br /><br />' +
 			'Notebook access is configured under <strong>Configuration → Joplin Grok AI</strong>.' +
+			'<div class="privacy-note">' +
+			'<strong>Privacy:</strong> When you chat, note titles and content the assistant reads ' +
+			'(via tools or “Include current note”) are sent to your configured AI provider ' +
+			'(xAI, OpenRouter, or your OpenAI-compatible endpoint). Do not use this on notes you ' +
+			'are not willing to share with that provider. Exclude private notebooks under settings.' +
+			'</div>' +
 			'</div>'
 		);
 	}

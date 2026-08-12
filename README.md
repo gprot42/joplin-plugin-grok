@@ -2,6 +2,18 @@
 
 A Joplin desktop plugin that connects **xAI Grok** or any **OpenAI-compatible** LLM (Ollama, LM Studio, OpenAI, etc.) to your notes.
 
+## Privacy warning
+
+**This plugin can send your note content to an external AI provider.**
+
+When you chat, the assistant may upload note titles and bodies it reads (search/read tools, summarize, or “Include current note context”) to:
+
+- **xAI** (Grok / SuperGrok), or  
+- **OpenRouter**, or  
+- **any OpenAI-compatible endpoint** you configure (including local servers such as Ollama).
+
+Only use it on notes you are willing to share with that provider. Exclude private notebooks under **Configuration → Joplin Grok AI**. Content is not kept “on device only” unless you point the provider at a fully local model.
+
 ## Features
 
 - **Chat** over your notes with tool-using agent (search, read, create, update, tag)
