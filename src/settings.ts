@@ -28,6 +28,12 @@ export enum SettingKey {
 	AllowCreateNotebooks = 'joplinGrok.allowCreateNotebooks',
 	ConfirmBeforeWrite = 'joplinGrok.confirmBeforeWrite',
 	ShowFab = 'joplinGrok.showFab',
+	/** Track token/USD estimates (subtle footer + Tools report) */
+	TrackUsage = 'joplinGrok.trackUsage',
+	/** Settings action: show usage report */
+	ShowUsageReport = 'joplinGrok.showUsageReport',
+	/** Settings action: reset lifetime usage */
+	ResetUsage = 'joplinGrok.resetUsage',
 	SystemPromptOverride = 'joplinGrok.systemPromptOverride',
 	PlacementConfidence = 'joplinGrok.placementConfidence',
 	MaxToolSteps = 'joplinGrok.maxToolSteps',
@@ -65,6 +71,7 @@ export interface PluginSettings {
 	allowCreateNotebooks: boolean;
 	confirmBeforeWrite: boolean;
 	showFab: boolean;
+	trackUsage: boolean;
 	systemPromptOverride: string;
 	placementConfidence: number;
 	maxToolSteps: number;
@@ -263,17 +270,24 @@ export async function registerSettings(): Promise<void> {
 			label: 'OpenAI-compatible model',
 		},
 
-		// --- AI access control (one clear entry) ---
+		// --- AI access control ---
+		// Note: SettingItemType.Button is not reliably rendered for plugins in all
+		// Joplin versions, so we use a clear action dropdown instead.
 		[SettingKey.OpenExcludeList]: {
-			value: false,
-			type: SettingItemType.Bool,
+			value: 'idle',
+			type: SettingItemType.String,
 			section: SETTINGS_SECTION,
 			public: true,
-			label: 'Manage excluded notebooks…',
+			label: 'Exclude notebooks / subnotebooks',
 			description:
 				blockedIds.size
-					? `Check, then Apply/OK. ${blockedIds.size} currently excluded. Pick notebooks, press + to add, × to remove, Save. Also: Tools → Joplin Grok: Manage excluded notebooks…`
-					: 'Check, then Apply/OK. Pick a notebook, press + to exclude it, repeat, × to remove, then Save. Also: Tools → Joplin Grok: Manage excluded notebooks…',
+					? `Select “Open manager…” below (Apply if your Joplin asks). ${blockedIds.size} currently excluded. Or: note toolbar ⛔ / Tools → Manage excluded notebooks…`
+					: 'Select “Open manager…” below (Apply if your Joplin asks). Popup: pick notebook → + Add → × remove → Save. Or note toolbar ⛔ / Tools menu.',
+			isEnum: true,
+			options: {
+				idle: '— Choose action —',
+				open: '▶ Open manager… (add / remove exclusions)',
+			},
 		},
 		// Hidden legacy toggles (keep keys so old configs don't break)
 		[SettingKey.OpenRestoreList]: {
@@ -304,7 +318,7 @@ export async function registerSettings(): Promise<void> {
 			public: true,
 			label: 'Excluded notebooks (read-only)',
 			description:
-				'Paths of notebooks blocked from AI (one per line). Edit via “Manage excluded notebooks…” above.',
+				'All excluded notebook paths (joined with · ). Edit via the button above — not by typing here.',
 		},
 		[SettingKey.BlockedNotebookIds]: {
 			value: '',
@@ -373,6 +387,38 @@ export async function registerSettings(): Promise<void> {
 			description:
 				'Black Grok button bottom-right over the note editor/viewer. Hidden while the chat panel is open. You can always open chat from the robot toolbar icon or Tools → Joplin Grok.',
 		},
+		[SettingKey.TrackUsage]: {
+			value: true,
+			type: SettingItemType.Bool,
+			section: SETTINGS_SECTION,
+			public: true,
+			advanced: true,
+			label: 'Track token usage (subtle)',
+			description:
+				'When on, chat may show a small muted “Usage · …” line under replies, and Tools → Show usage report lists session/lifetime tokens and estimated USD. SuperGrok USD is an estimate at published API rates.',
+		},
+		[SettingKey.ShowUsageReport]: {
+			value: 'idle',
+			type: SettingItemType.String,
+			section: SETTINGS_SECTION,
+			public: true,
+			advanced: true,
+			label: 'Usage report',
+			description: 'Select “Show report…” to see tokens and estimated USD (not shown in the main UI).',
+			isEnum: true,
+			options: {
+				idle: '—',
+				show: 'Show report…',
+				reset: 'Reset lifetime totals…',
+			},
+		},
+		[SettingKey.ResetUsage]: {
+			value: false,
+			type: SettingItemType.Bool,
+			section: SETTINGS_SECTION,
+			public: false,
+			label: 'Reset usage (legacy)',
+		},
 		[SettingKey.PlacementConfidence]: {
 			value: 0.55,
 			type: SettingItemType.String,
@@ -413,15 +459,20 @@ export async function refreshExcludePickerSettings(): Promise<void> {
 
 	await joplin.settings.registerSettings({
 		[SettingKey.OpenExcludeList]: {
-			value: false,
-			type: SettingItemType.Bool,
+			value: 'idle',
+			type: SettingItemType.String,
 			section: SETTINGS_SECTION,
 			public: true,
-			label: 'Manage excluded notebooks…',
+			label: 'Exclude notebooks / subnotebooks',
 			description:
 				blockedIds.size
-					? `Check, then Apply/OK. ${blockedIds.size} currently excluded. Pick notebooks, press + to add, × to remove, Save.`
-					: 'Check, then Apply/OK. Pick a notebook, press + to exclude, × to remove, then Save.',
+					? `Select “Open manager…” (${blockedIds.size} excluded). Or note toolbar / Tools menu.`
+					: 'Select “Open manager…” to add/remove exclusions. Or note toolbar / Tools menu.',
+			isEnum: true,
+			options: {
+				idle: '— Choose action —',
+				open: '▶ Open manager… (add / remove exclusions)',
+			},
 		},
 		[SettingKey.ExcludedNotebookPathsDisplay]: {
 			value: String((await joplin.settings.value(SettingKey.ExcludedNotebookPathsDisplay)) || ''),
@@ -430,24 +481,20 @@ export async function refreshExcludePickerSettings(): Promise<void> {
 			public: true,
 			label: 'Excluded notebooks (read-only)',
 			description:
-				'Paths of notebooks blocked from AI (one per line). Edit via “Manage excluded notebooks…” above.',
+				'All excluded paths ( · separated so every entry is visible). Edit via Open manager… above.',
 		},
 	});
-
+	// Park action dropdown so the next pick is a real change
 	try {
-		await joplin.settings.setValue(SettingKey.OpenExcludeList, false);
-		await joplin.settings.setValue(SettingKey.ExcludeNotebookPicker, false);
-		await joplin.settings.setValue(SettingKey.OpenRestoreList, false);
-		await joplin.settings.setValue(SettingKey.RestoreNotebookPicker, PICKER_NONE);
+		await joplin.settings.setValue(SettingKey.OpenExcludeList, 'idle');
 	} catch {
 		/* ignore */
 	}
 }
 
-/** Clear sticky action toggles left over after Apply. */
+/** Clear sticky action toggles left over after Apply (legacy bools only). */
 export async function resetStickyPickers(): Promise<void> {
 	try {
-		await joplin.settings.setValue(SettingKey.OpenExcludeList, false);
 		await joplin.settings.setValue(SettingKey.ExcludeNotebookPicker, false);
 		await joplin.settings.setValue(SettingKey.OpenRestoreList, false);
 		await joplin.settings.setValue(SettingKey.RestoreNotebookPicker, PICKER_NONE);
@@ -487,7 +534,9 @@ export async function loadSettings(): Promise<PluginSettings> {
 		defaultNotebookId: String((await joplin.settings.value(SettingKey.DefaultNotebookId)) || ''),
 		allowCreateNotebooks: Boolean(await joplin.settings.value(SettingKey.AllowCreateNotebooks)),
 		confirmBeforeWrite: Boolean(await joplin.settings.value(SettingKey.ConfirmBeforeWrite)),
-		showFab: Boolean(await joplin.settings.value(SettingKey.ShowFab)),
+		// Default true when unset (Boolean(undefined) would incorrectly be false)
+		showFab: (await joplin.settings.value(SettingKey.ShowFab)) !== false,
+		trackUsage: (await joplin.settings.value(SettingKey.TrackUsage)) !== false,
 		systemPromptOverride: String((await joplin.settings.value(SettingKey.SystemPromptOverride)) || ''),
 		placementConfidence: Number.isFinite(conf) ? conf : 0.55,
 		maxToolSteps: Number((await joplin.settings.value(SettingKey.MaxToolSteps)) || 8),
@@ -498,24 +547,29 @@ export async function loadSettings(): Promise<PluginSettings> {
 	};
 }
 
-/** Keep the human-readable paths setting in sync with blocked IDs. */
+function parseBlockedIdList(raw: string): string[] {
+	return String(raw || '')
+		.split(/[\n,;]+|\s·\s/)
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
+/**
+ * Keep the human-readable paths setting in sync with blocked IDs (settings + disk).
+ * Joplin’s String setting is single-line — use " · " so every path is visible.
+ */
 export async function syncExcludedPathsDisplay(): Promise<void> {
-	const raw = String((await joplin.settings.value(SettingKey.BlockedNotebookIds)) || '');
-	const ids = new Set(parseBlockedIdList(raw));
-	if (!ids.size) {
+	const { loadExcludedIds, persistExcludedIds } = await import('./joplin/excludedStore');
+	const ids = await loadExcludedIds();
+	if (!ids.length) {
 		await joplin.settings.setValue(SettingKey.ExcludedNotebookPathsDisplay, '');
+		// Keep disk in sync if settings were cleared but disk had data (or vice versa)
+		await persistExcludedIds([]);
 		return;
 	}
 	const notebooks = await listNotebookPaths();
-	const paths = notebooks.filter((n) => ids.has(n.id)).map((n) => n.path);
-	await joplin.settings.setValue(SettingKey.ExcludedNotebookPathsDisplay, paths.join('\n'));
-}
-
-function parseBlockedIdList(raw: string): string[] {
-	return String(raw || '')
-		.split(/[\n,;]+/)
-		.map((s) => s.trim())
-		.filter(Boolean);
+	const byId = new Map(notebooks.map((n) => [n.id, n.path]));
+	await persistExcludedIds(ids, byId);
 }
 
 /** Append a notebook ID to the blocked list (no duplicates). */
@@ -525,21 +579,27 @@ export async function addBlockedNotebookId(notebookId: string): Promise<void> {
 
 /** Append several notebook IDs to the blocked list (no duplicates). */
 export async function addBlockedNotebookIds(notebookIds: string[]): Promise<number> {
-	const raw = String((await joplin.settings.value(SettingKey.BlockedNotebookIds)) || '');
-	const ids = parseBlockedIdList(raw);
-	const set = new Set(ids);
-	let added = 0;
+	const { loadExcludedIds, persistExcludedIds } = await import('./joplin/excludedStore');
+	const existing = await loadExcludedIds();
+	const before = existing.length;
+	const set = new Set(existing);
+	const next = [...existing];
 	for (const id of notebookIds) {
 		const clean = String(id || '').trim();
 		if (!clean || set.has(clean)) continue;
 		set.add(clean);
-		ids.push(clean);
-		added += 1;
+		next.push(clean);
 	}
-	if (added) {
-		await joplin.settings.setValue(SettingKey.BlockedNotebookIds, ids.join('\n'));
+	if (next.length === before) return 0;
+	let pathById: Map<string, string> | undefined;
+	try {
+		const notebooks = await listNotebookPaths();
+		pathById = new Map(notebooks.map((n) => [n.id, n.path]));
+	} catch {
+		/* ignore */
 	}
-	return added;
+	await persistExcludedIds(next, pathById);
+	return next.length - before;
 }
 
 /** Remove a notebook ID from the blocked list. */
@@ -553,12 +613,18 @@ export async function removeBlockedNotebookIds(notebookIds: string[]): Promise<n
 		notebookIds.map((id) => String(id || '').trim()).filter(Boolean)
 	);
 	if (!remove.size) return 0;
-	const raw = String((await joplin.settings.value(SettingKey.BlockedNotebookIds)) || '');
-	const before = parseBlockedIdList(raw);
+	const { loadExcludedIds, persistExcludedIds } = await import('./joplin/excludedStore');
+	const before = await loadExcludedIds();
 	const ids = before.filter((id) => !remove.has(id));
 	const removed = before.length - ids.length;
-	if (removed) {
-		await joplin.settings.setValue(SettingKey.BlockedNotebookIds, ids.join('\n'));
+	if (!removed) return 0;
+	let pathById: Map<string, string> | undefined;
+	try {
+		const notebooks = await listNotebookPaths();
+		pathById = new Map(notebooks.map((n) => [n.id, n.path]));
+	} catch {
+		/* ignore */
 	}
+	await persistExcludedIds(ids, pathById);
 	return removed;
 }

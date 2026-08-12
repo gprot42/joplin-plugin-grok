@@ -360,6 +360,10 @@
 					var reply = result.assistantMessage || '(empty)';
 					appendMessage('assistant', reply);
 					chatHistory.push({ role: 'assistant', content: reply });
+					// Subtle usage line (tokens / est. USD) — not a primary UI element
+					if (result.usageFooter) {
+						appendMessage('usage', String(result.usageFooter), 'usage');
+					}
 					setStatus('Done', 'ok');
 				}
 			})

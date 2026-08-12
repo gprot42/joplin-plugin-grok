@@ -34,10 +34,17 @@ export interface ChatRequest {
 	tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
 }
 
+export interface ChatTokenUsage {
+	prompt_tokens: number;
+	completion_tokens: number;
+	total_tokens: number;
+}
+
 export interface ChatResponse {
 	message: ChatMessage;
 	finish_reason?: string;
 	raw?: unknown;
+	usage?: ChatTokenUsage | null;
 }
 
 export interface LLMProvider {

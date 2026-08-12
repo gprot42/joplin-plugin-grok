@@ -32,7 +32,16 @@ export function parseIdList(raw: string): string[] {
 }
 
 export async function loadAccessPolicy(): Promise<AccessPolicy> {
-	const blockedIds = parseIdList(String((await joplin.settings.value(SettingKey.BlockedNotebookIds)) || ''));
+	// Prefer disk+settings merge so exclusions survive restarts even if settings lag
+	let blockedIds: string[] = [];
+	try {
+		const { loadExcludedIds } = await import('./excludedStore');
+		blockedIds = await loadExcludedIds();
+	} catch {
+		blockedIds = parseIdList(
+			String((await joplin.settings.value(SettingKey.BlockedNotebookIds)) || '')
+		);
+	}
 	const allowedIds = parseIdList(String((await joplin.settings.value(SettingKey.AllowedNotebookIds)) || ''));
 	const patterns = parseIdList(String((await joplin.settings.value(SettingKey.BlockedPathPatterns)) || ''));
 	const allowlistMode = Boolean(await joplin.settings.value(SettingKey.AllowlistMode));

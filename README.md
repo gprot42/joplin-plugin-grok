@@ -87,12 +87,12 @@ Three layers (all enforced in every tool: search, get, create, update, place):
 
 **Exclude notebooks (simple)**
 
-1. **Configuration → Joplin Grok AI** → check **Manage excluded notebooks…** → **Apply** / **OK**  
-   (or **Tools → Joplin Grok: Manage excluded notebooks…**)
-2. Choose a notebook from the dropdown → click **+ Add**
-3. Repeat for more notebooks
-4. Click **×** on any row to remove it
-5. Click **Save**
+Open the manager via any of:
+- **Note toolbar** ban icon (⛔ / exclude button next to Grok)
+- **Configuration → Joplin Grok AI → Exclude notebooks / subnotebooks** → select **Open manager…**
+- **Tools → Joplin Grok: Manage excluded notebooks…**
+
+Then: choose a notebook → **+ Add** → repeat → **×** to remove → **Save**.
 
 Excluded notebooks **and all their subnotebooks** are hidden from search, read, create, update, place, and tag.
 

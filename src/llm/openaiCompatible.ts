@@ -69,6 +69,17 @@ export class OpenAICompatibleProvider implements LLMProvider {
 		}
 
 		const message = choice.message || {};
+		const u = data?.usage;
+		const usage =
+			u && typeof u === 'object'
+				? {
+						prompt_tokens: Number(u.prompt_tokens ?? u.input_tokens ?? 0) || 0,
+						completion_tokens: Number(u.completion_tokens ?? u.output_tokens ?? 0) || 0,
+						total_tokens:
+							Number(u.total_tokens ?? 0) ||
+							(Number(u.prompt_tokens ?? 0) || 0) + (Number(u.completion_tokens ?? 0) || 0),
+					}
+				: null;
 		return {
 			message: {
 				role: message.role || 'assistant',
@@ -77,6 +88,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 			},
 			finish_reason: choice.finish_reason,
 			raw: data,
+			usage,
 		};
 	}
 }

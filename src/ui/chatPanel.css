@@ -194,6 +194,22 @@ button:disabled {
 	border: 1px dashed var(--border);
 }
 
+/* Quiet usage line — tokens / est. USD; not a primary surface */
+.msg.usage {
+	background: transparent;
+	border: none;
+	padding: 0 10px 6px;
+	margin-top: -6px;
+	margin-bottom: 10px;
+	font-size: 10px;
+	color: var(--text-muted);
+	opacity: 0.75;
+}
+
+.msg.usage .role {
+	display: none;
+}
+
 .msg.error {
 	background: #3a2226;
 	border: 1px solid var(--danger);

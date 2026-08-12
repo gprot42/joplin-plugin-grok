@@ -17,8 +17,9 @@
 		'<path fill="currentColor" d="M18.2 14.2l.95 3.1 3.1.95-3.1.95-.95 3.1-.95-3.1-3.1-.95 3.1-.95.95-3.1z"/>' +
 		'</svg>';
 
-	var show = true;
+	var wantShow = true;
 	var opening = false;
+	var lastOpenAt = 0;
 
 	function post(msg) {
 		if (typeof webviewApi === 'undefined' || !webviewApi.postMessage) return Promise.resolve(null);
@@ -43,30 +44,35 @@
 		btn.setAttribute('aria-label', 'Open Grok');
 		btn.style.cssText = STYLE;
 		btn.innerHTML = STAR;
-		btn.addEventListener(
-			'click',
-			function (e) {
-				e.preventDefault();
-				e.stopPropagation();
-				if (opening) return;
-				opening = true;
-				// One click: hide FAB immediately, open panel
-				ensureFab(false);
-				show = false;
-				post({ type: 'openAssistant' })
-					.then(function () {
-						show = false;
-					})
-					.catch(function () {
-						show = true;
-						ensureFab(true);
-					})
-					.then(function () {
-						opening = false;
-					});
-			},
-			true
-		);
+
+		function fire(e) {
+			e.preventDefault();
+			e.stopPropagation();
+			var now = Date.now();
+			if (opening || now - lastOpenAt < 600) return;
+			opening = true;
+			lastOpenAt = now;
+			post({ type: 'openAssistant' })
+				.then(function (res) {
+					if (res && res.ok !== false) {
+						wantShow = false;
+						ensureFab(false);
+					}
+				})
+				.catch(function () {
+					wantShow = true;
+					ensureFab(true);
+				})
+				.then(function () {
+					opening = false;
+					setTimeout(refresh, 500);
+					setTimeout(refresh, 1500);
+				});
+		}
+
+		// pointerdown: first interaction often only focuses the editor/webview
+		btn.addEventListener('pointerdown', fire, true);
+		btn.addEventListener('click', fire, true);
 		document.body.appendChild(btn);
 	}
 
@@ -74,19 +80,19 @@
 		if (opening) return;
 		post({ type: 'getFabVisible' })
 			.then(function (res) {
-				if (res && typeof res.showFab === 'boolean') show = res.showFab;
-				ensureFab(show);
+				if (res && typeof res.showFab === 'boolean') wantShow = res.showFab;
+				ensureFab(wantShow);
 			})
 			.catch(function () {
-				ensureFab(show);
+				ensureFab(wantShow);
 			});
 	}
 
 	function boot() {
 		refresh();
-		setTimeout(refresh, 400);
-		setTimeout(refresh, 1200);
-		setTimeout(refresh, 2500);
+		setTimeout(refresh, 500);
+		setTimeout(refresh, 1500);
+		setInterval(refresh, 2500);
 	}
 
 	if (document.readyState === 'loading') {

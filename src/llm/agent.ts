@@ -10,11 +10,20 @@ import {
 import { createProvider } from './factory';
 import { executeTool, TOOL_SPECS } from './tools';
 import { ChatMessage, LLMProvider } from './types';
+import {
+	formatUsageFooter,
+	getUsageSnapshot,
+	recordChatUsage,
+	UsageRecord,
+} from './usage';
+import { modelForProvider } from '../settings';
 
 export interface AgentTurnResult {
 	assistantMessage: string;
 	toolTrace: { name: string; args: string; result: unknown }[];
 	error?: string;
+	/** Subtle one-line usage footer (tokens + est. USD); omit if tracking off / no data */
+	usageFooter?: string;
 }
 
 /** Compress note body so the model cannot easily paste raw dumps. */
@@ -210,7 +219,8 @@ async function synthesizeSummary(
 	provider: LLMProvider,
 	userText: string,
 	sources: SummarySource[],
-	notebookHint: string
+	notebookHint: string,
+	onUsage?: (raw: unknown) => Promise<void>
 ): Promise<string> {
 	const pack = sources
 		.map((s, i) => {
@@ -248,6 +258,7 @@ async function synthesizeSummary(
 		],
 		temperature: 0.2,
 	});
+	if (onUsage) await onUsage(res.raw);
 	return (res.message.content || '').trim();
 }
 
@@ -275,6 +286,25 @@ export async function runAgentTurn(
 
 	const toolTrace: AgentTurnResult['toolTrace'] = [];
 	const maxSteps = Math.max(1, Math.min(20, settings.maxToolSteps || 8));
+	const trackUsage = settings.trackUsage !== false;
+	const model = modelForProvider(settings);
+	const authMode = settings.provider === 'xai' ? settings.xaiAuthMode : settings.provider;
+	let lastUsageRec: UsageRecord | null = null;
+
+	const track = async (raw: unknown) => {
+		if (!trackUsage) return;
+		try {
+			const rec = await recordChatUsage({
+				raw,
+				model,
+				provider: settings.provider,
+				authMode,
+			});
+			if (rec) lastUsageRec = rec;
+		} catch {
+			/* ignore usage errors */
+		}
+	};
 
 	try {
 		let finalAssistant = '';
@@ -289,6 +319,7 @@ export async function runAgentTurn(
 				// Slightly lower temp for summaries so output stays structured
 				temperature: wantsSummary ? 0.2 : 0.3,
 			});
+			await track(response.raw);
 
 			const msg = response.message;
 			messages.push({
@@ -340,7 +371,8 @@ export async function runAgentTurn(
 						provider,
 						userText,
 						sources,
-						notebookHint
+						notebookHint,
+						track
 					);
 					if (synthesized) {
 						finalAssistant = synthesized;
@@ -373,6 +405,7 @@ export async function runAgentTurn(
 						],
 						temperature: 0.2,
 					});
+					await track(rewrite.raw);
 					if (rewrite.message.content?.trim()) {
 						finalAssistant = rewrite.message.content.trim();
 					}
@@ -382,9 +415,20 @@ export async function runAgentTurn(
 			}
 		}
 
+		let usageFooter = '';
+		if (trackUsage) {
+			try {
+				const snap = await getUsageSnapshot();
+				usageFooter = formatUsageFooter(lastUsageRec, snap.session, authMode);
+			} catch {
+				/* ignore */
+			}
+		}
+
 		return {
 			assistantMessage: finalAssistant,
 			toolTrace,
+			usageFooter: usageFooter || undefined,
 		};
 	} catch (e: any) {
 		return {

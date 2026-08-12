@@ -1,6 +1,5 @@
 /**
- * CodeMirror content script — single floating Grok button (bottom-right).
- * Only used when the chat panel is closed (no docked empty rail).
+ * CodeMirror content script — floating Grok button (bottom-right).
  */
 import { ContentScriptContext } from 'api/types';
 
@@ -34,14 +33,14 @@ const STAR_SVG =
 	'<path fill="currentColor" d="M18.2 14.2l.95 3.1 3.1.95-3.1.95-.95 3.1-.95-3.1-3.1-.95 3.1-.95.95-3.1z"/>' +
 	'</svg>';
 
-function ensureFab(doc: Document, visible: boolean): void {
-	const existing = doc.getElementById(FAB_ID);
+function ensureFab(doc: Document, visible: boolean, onActivate: () => void): void {
+	const existing = doc.getElementById(FAB_ID) as HTMLButtonElement | null;
 	if (!visible) {
 		if (existing) existing.remove();
 		return;
 	}
 	if (existing) {
-		(existing as HTMLElement).style.cssText = FAB_STYLE;
+		existing.style.cssText = FAB_STYLE;
 		return;
 	}
 	if (!doc.body) return;
@@ -52,7 +51,15 @@ function ensureFab(doc: Document, visible: boolean): void {
 	btn.setAttribute('aria-label', 'Open Grok');
 	btn.style.cssText = FAB_STYLE;
 	btn.innerHTML = STAR_SVG;
-	// Click handler is attached once at creation via the outer plugin() closure.
+
+	// Use pointerdown — CodeMirror often eats the first "click" for focus
+	const fire = (e: Event) => {
+		e.preventDefault();
+		e.stopPropagation();
+		onActivate();
+	};
+	btn.addEventListener('pointerdown', fire, true);
+	btn.addEventListener('click', fire, true);
 	doc.body.appendChild(btn);
 }
 
@@ -67,68 +74,58 @@ module.exports = {
 					null;
 				if (!doc) return;
 
-				let cachedShow: boolean | null = null;
-				let lastFetch = 0;
+				let wantShow = true;
 				let opening = false;
+				let lastOpenAt = 0;
 
-				const setVisible = (visible: boolean) => {
-					cachedShow = visible;
-					ensureFab(doc, visible);
-					const btn = doc.getElementById(FAB_ID) as HTMLButtonElement | null;
-					if (btn && !btn.dataset.grokBound) {
-						btn.dataset.grokBound = '1';
-						btn.addEventListener(
-							'click',
-							(e) => {
-								e.preventDefault();
-								e.stopPropagation();
-								if (opening) return;
-								opening = true;
-								// Hide immediately so one click feels definitive
-								setVisible(false);
-								void context
-									.postMessage({ type: 'openAssistant' })
-									.then(() => {
-										cachedShow = false;
-										lastFetch = Date.now();
-									})
-									.catch(() => {
-										// Re-show if open failed
-										setVisible(true);
-									})
-									.finally(() => {
-										opening = false;
-									});
-							},
-							true
-						);
-					}
+				const onActivate = () => {
+					const now = Date.now();
+					// Ignore double-fire from pointerdown+click or dual listeners
+					if (opening || now - lastOpenAt < 600) return;
+					opening = true;
+					lastOpenAt = now;
+					// Hide only after host accepts open — keep button if open fails
+					void context
+						.postMessage({ type: 'openAssistant' })
+						.then((res: any) => {
+							if (res && res.ok !== false) {
+								wantShow = false;
+								ensureFab(doc, false, onActivate);
+							}
+						})
+						.catch(() => {
+							wantShow = true;
+							ensureFab(doc, true, onActivate);
+						})
+						.finally(() => {
+							opening = false;
+							setTimeout(() => void tick(true), 500);
+							setTimeout(() => void tick(true), 1500);
+						});
 				};
 
-				const tick = async () => {
+				const tick = async (_force = false) => {
+					if (opening) return;
 					try {
-						const now = Date.now();
-						// While a click is in flight, don't resurrect the FAB from a stale poll
-						if (opening) return;
-						if (cachedShow === null || now - lastFetch > 1500) {
-							const res: any = await context.postMessage({ type: 'getFabVisible' });
-							cachedShow = res?.showFab !== false;
-							lastFetch = now;
+						const res: any = await context.postMessage({ type: 'getFabVisible' });
+						if (res && typeof res.showFab === 'boolean') {
+							wantShow = res.showFab;
 						}
-						setVisible(cachedShow !== false);
 					} catch {
-						/* ignore */
+						/* keep */
 					}
+					ensureFab(doc, wantShow, onActivate);
 				};
 
-				void tick();
-				[200, 600, 1500, 3000].forEach((ms) => setTimeout(() => void tick(), ms));
+				void tick(true);
+				[400, 1000, 2500].forEach((ms) => setTimeout(() => void tick(true), ms));
+				setInterval(() => void tick(true), 2500);
 
 				const root = doc.documentElement || doc.body;
 				if (root) {
 					const obs = new MutationObserver(() => {
 						if (opening) return;
-						if (!doc.getElementById(FAB_ID) && cachedShow !== false) void tick();
+						if (!doc.getElementById(FAB_ID) && wantShow) void tick(true);
 					});
 					obs.observe(root, { childList: true, subtree: true });
 				}

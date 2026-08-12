@@ -36,12 +36,15 @@ const CMD_COPY_NOTEBOOK_ID = 'joplinGrok.copyNotebookId';
 const CMD_OPEN_EXCLUDE = 'joplinGrok.openExcludeNotebooks';
 const CMD_OPEN_RESTORE = 'joplinGrok.openRestoreNotebooks';
 const CMD_SHOW_XAI_KEY = 'joplinGrok.showXaiApiKey';
+const CMD_SHOW_USAGE = 'joplinGrok.showUsage';
 
 let panel: ViewHandle | null = null;
 /** Serializes first create so concurrent FAB clicks don't race two create() calls. */
 let panelCreatePromise: Promise<ViewHandle> | null = null;
-/** true = chat panel visible; false = panel hidden (floating FAB only if enabled). */
+/** User intent / soft cache: true after open, false after close. */
 let panelExpanded = false;
+/** When true, background warm-up must not hide the panel. */
+let userWantsPanelOpen = false;
 /** Serializes open/close so the first click always completes before a second runs. */
 let panelVisibilityChain: Promise<void> = Promise.resolve();
 
@@ -59,18 +62,31 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function hidePanelRaw(p: ViewHandle): Promise<void> {
+	try {
+		await joplin.views.panels.hide(p);
+	} catch {
+		await joplin.views.panels.show(p, false);
+	}
+}
+
 async function ensurePanel(): Promise<ViewHandle> {
 	if (panel) return panel;
 	if (panelCreatePromise) return panelCreatePromise;
 
 	panelCreatePromise = (async () => {
 		const p = await joplin.views.panels.create(PANEL_ID);
+		// Create often shows the panel immediately — hide ASAP unless user already opened
+		if (!userWantsPanelOpen) {
+			await hidePanelRaw(p);
+		}
 		await joplin.views.panels.setHtml(p, CHAT_PANEL_HTML);
 		await joplin.views.panels.addScript(p, './ui/chatPanel.css');
 		await joplin.views.panels.addScript(p, './ui/chatPanel.js');
 		await joplin.views.panels.onMessage(p, handlePanelMessage);
-		// Stay closed until an explicit open — avoids empty black rail at startup.
-		await joplin.views.panels.show(p, false);
+		if (!userWantsPanelOpen) {
+			await hidePanelRaw(p);
+		}
 		panel = p;
 		return p;
 	})();
@@ -86,7 +102,6 @@ async function ensurePanel(): Promise<ViewHandle> {
 function pushPanelMessages(): void {
 	if (!panel || !panelExpanded) return;
 	try {
-		// Joplin postMessage is fire-and-forget (void); webview may still be booting.
 		joplin.views.panels.postMessage(panel, { type: 'setUiMode', mode: 'chat' });
 		if (sessionTranscript.length) {
 			joplin.views.panels.postMessage(panel, {
@@ -101,50 +116,70 @@ function pushPanelMessages(): void {
 }
 
 /**
- * Open/close the chat panel. Lazy-creates on first open so startup never leaves
- * a docked empty rail, and re-asserts show(true) once after first open (Joplin
- * often ignores the first show right after create+hide).
+ * Open the chat panel. CRITICAL: never hide() during open.
+ * Earlier “retry with hide→show” undid successful opens when visible() was wrong,
+ * which felt like “need two clicks”.
+ */
+async function forceOpenPanel(): Promise<void> {
+	userWantsPanelOpen = true;
+	panelExpanded = true;
+	const p = await ensurePanel();
+	if (!userWantsPanelOpen) return;
+
+	// Only show(true) — multiple times for Joplin flakiness. Never hide here.
+	const delays = [0, 40, 100, 220, 450, 800];
+	for (const ms of delays) {
+		if (!userWantsPanelOpen) return;
+		if (ms) await sleep(ms);
+		if (!userWantsPanelOpen) return;
+		await joplin.views.panels.show(p, true);
+		pushPanelMessages();
+	}
+	panelExpanded = true;
+}
+
+async function forceClosePanel(): Promise<void> {
+	userWantsPanelOpen = false;
+	panelExpanded = false;
+	if (!panel) return;
+	await hidePanelRaw(panel);
+	await sleep(30);
+	if (!userWantsPanelOpen) {
+		await hidePanelRaw(panel);
+	}
+	panelExpanded = false;
+}
+
+/**
+ * Open/close the chat panel. Serialized so concurrent clicks cannot cancel each other.
  */
 async function showPanel(show: boolean): Promise<void> {
 	const run = async () => {
-		if (!show) {
-			panelExpanded = false;
-			if (panel) {
-				await joplin.views.panels.show(panel, false);
-			}
-			return;
-		}
-
-		const openingFromClosed = !panelExpanded;
-		const p = await ensurePanel();
-		panelExpanded = true;
-
-		// Always show when requested (idempotent open from FAB).
-		await joplin.views.panels.show(p, true);
-
-		// First open after create is flaky: Joplin mounts the webview asynchronously
-		// and a single show(true) can leave the panel closed until a second call.
-		if (openingFromClosed) {
-			await sleep(40);
-			if (panelExpanded && panel) {
-				await joplin.views.panels.show(panel, true);
-			}
-			await sleep(120);
-			if (panelExpanded && panel) {
-				await joplin.views.panels.show(panel, true);
-				pushPanelMessages();
-			}
-		} else {
-			pushPanelMessages();
-		}
+		if (show) await forceOpenPanel();
+		else await forceClosePanel();
 	};
-
 	panelVisibilityChain = panelVisibilityChain.then(run, run);
 	await panelVisibilityChain;
 }
 
 async function togglePanel(): Promise<void> {
+	// Intent from our flag only (Joplin visible() is unreliable on some builds)
 	await showPanel(!panelExpanded);
+}
+
+/**
+ * Pre-create panel at startup (hidden). Do NOT show/hide race with user clicks.
+ */
+async function warmPanelInBackground(): Promise<void> {
+	try {
+		await ensurePanel();
+		if (!userWantsPanelOpen && panel) {
+			await hidePanelRaw(panel);
+			panelExpanded = false;
+		}
+	} catch (e) {
+		console.warn('Joplin Grok: panel pre-create failed', e);
+	}
 }
 
 async function handlePanelMessage(message: any): Promise<any> {
@@ -161,15 +196,22 @@ async function handlePanelMessage(message: any): Promise<any> {
 
 		case 'getFabVisible': {
 			const settings = await loadSettings();
-			// Floating button only when chat is closed and the setting is on
-			return { showFab: settings.showFab && !panelExpanded };
+			const enabled = settings.showFab !== false;
+			// Trust open intent flag — not Joplin visible() (can be wrong mid-open)
+			return { showFab: enabled && !panelExpanded && !userWantsPanelOpen };
 		}
 
 		case 'openAssistant': {
+			// Always force open (never toggle). Sets userWantsPanelOpen first so
+			// warm-up / ensurePanel cannot hide the panel after this click.
+			userWantsPanelOpen = true;
+			panelExpanded = true;
 			await showPanel(true);
 			return {
 				messages: sessionTranscript,
 				chatMode: sessionChatMode,
+				ok: true,
+				expanded: true,
 			};
 		}
 
@@ -265,6 +307,7 @@ async function handlePanelMessage(message: any): Promise<any> {
 					return {
 						assistantMessage: summary.summary,
 						toolTrace: [],
+						usageFooter: undefined,
 					};
 				}
 
@@ -320,6 +363,35 @@ async function copyCurrentNotebookId(): Promise<void> {
 /** Reveal the stored xAI API key (Show sits beside the key field in a dialog). */
 async function showXaiApiKey(): Promise<void> {
 	await openShowXaiApiKeyDialog();
+}
+
+/** Quiet usage report (tokens + estimated USD) — not a primary UI surface. */
+async function showUsageReport(): Promise<void> {
+	const settings = await loadSettings();
+	const { getUsageSnapshot, formatUsageReport, resetLifetimeUsage } = await import(
+		'./llm/usage'
+	);
+	const snap = await getUsageSnapshot();
+	const authMode = settings.provider === 'xai' ? settings.xaiAuthMode : settings.provider;
+	const report = formatUsageReport(snap, authMode, modelForProvider(settings));
+	await joplin.views.dialogs.showMessageBox(report);
+}
+
+async function handleUsageSettingsAction(action: string): Promise<void> {
+	if (action === 'show') {
+		await showUsageReport();
+	} else if (action === 'reset') {
+		const { resetLifetimeUsage } = await import('./llm/usage');
+		await resetLifetimeUsage();
+		await joplin.views.dialogs.showMessageBox(
+			'Usage totals reset for this device (session + lifetime).'
+		);
+	}
+	try {
+		await joplin.settings.setValue(SettingKey.ShowUsageReport, 'idle');
+	} catch {
+		/* ignore */
+	}
 }
 
 joplin.plugins.register({
@@ -383,9 +455,24 @@ joplin.plugins.register({
 			},
 		});
 
+		await joplin.commands.register({
+			name: CMD_SHOW_USAGE,
+			label: 'Joplin Grok: Show usage (tokens / USD)…',
+			iconName: 'fas fa-chart-bar',
+			execute: async () => {
+				await showUsageReport();
+			},
+		});
+
 		await joplin.views.toolbarButtons.create(
 			'joplinGrokToolbarBtn',
 			CMD_TOGGLE,
+			ToolbarButtonLocation.NoteToolbar
+		);
+		// Always-visible button to manage exclusions (settings "Button" type is unreliable)
+		await joplin.views.toolbarButtons.create(
+			'joplinGrokExcludeToolbarBtn',
+			CMD_OPEN_EXCLUDE,
 			ToolbarButtonLocation.NoteToolbar
 		);
 
@@ -414,10 +501,16 @@ joplin.plugins.register({
 			CMD_SHOW_XAI_KEY,
 			MenuItemLocation.Tools
 		);
+		await joplin.views.menuItems.create(
+			'joplinGrokMenuUsage',
+			CMD_SHOW_USAGE,
+			MenuItemLocation.Tools
+		);
 
-		// Lazy-create chat panel on first open (no black empty rail at startup).
+		// Pre-create + warm panel so the first FAB/toolbar click only needs show(true).
+		void warmPanelInBackground();
+
 		// Floating FAB is injected by editor/viewer content scripts below.
-
 		await joplin.contentScripts.register(
 			ContentScriptType.CodeMirrorPlugin,
 			FAB_CONTENT_SCRIPT_ID,
@@ -432,20 +525,41 @@ joplin.plugins.register({
 		);
 		await joplin.contentScripts.onMessage(VIEWER_FAB_CONTENT_SCRIPT_ID, handlePanelMessage);
 
-		// Keep path display + restore dropdown in sync at startup
+		// Hydrate excluded notebooks from plugin dataDir + settings (survives restart)
 		try {
 			await resetStickyPickers();
-			await syncExcludedPathsDisplay();
+			const { hydrateExcludedOnStartup } = await import('./joplin/excludedStore');
+			const { listNotebookPaths } = await import('./joplin/notebooks');
+			await hydrateExcludedOnStartup(async (ids) => {
+				const nodes = await listNotebookPaths();
+				const map = new Map(nodes.map((n) => [n.id, n.path]));
+				// Ensure every id has a label even if missing from tree
+				for (const id of ids) {
+					if (!map.has(id)) map.set(id, id);
+				}
+				return map;
+			});
 			await refreshExcludePickerSettings();
 		} catch (e) {
-			console.warn('Joplin Grok: could not sync excluded paths display', e);
+			console.warn('Joplin Grok: could not hydrate excluded notebooks', e);
+			try {
+				await syncExcludedPathsDisplay();
+				await refreshExcludePickerSettings();
+			} catch {
+				/* ignore */
+			}
 		}
-		// Notebooks may not be ready at plugin start — refresh pickers again shortly after
+		// Notebooks may not be ready at plugin start — re-sync shortly after
 		for (const ms of [1500, 4000]) {
 			setTimeout(() => {
-				void refreshExcludePickerSettings().catch(() => {
-					/* ignore */
-				});
+				void (async () => {
+					try {
+						await syncExcludedPathsDisplay();
+						await refreshExcludePickerSettings();
+					} catch {
+						/* ignore */
+					}
+				})();
 			}, ms);
 		}
 
@@ -506,25 +620,45 @@ joplin.plugins.register({
 				await syncSuperGrokSessionLabel();
 			}
 
-			// Single entry: Manage excluded notebooks… (select → + → list with ×)
+			if (ev.keys.includes(SettingKey.ShowUsageReport)) {
+				const action = String(
+					(await joplin.settings.value(SettingKey.ShowUsageReport).catch(() => 'idle')) ||
+						'idle'
+				);
+				if (action === 'show' || action === 'reset') {
+					await handleUsageSettingsAction(action);
+				}
+			}
+
+			// Settings action: enum "open" or legacy bools → exclude popup
 			if (
 				ev.keys.includes(SettingKey.OpenExcludeList) ||
 				ev.keys.includes(SettingKey.ExcludeNotebookPicker) ||
 				ev.keys.includes(SettingKey.OpenRestoreList)
 			) {
-				const open =
-					Boolean(await joplin.settings.value(SettingKey.OpenExcludeList)) ||
-					Boolean(await joplin.settings.value(SettingKey.ExcludeNotebookPicker)) ||
-					Boolean(await joplin.settings.value(SettingKey.OpenRestoreList));
-				if (open) {
+				const action = String(
+					(await joplin.settings.value(SettingKey.OpenExcludeList).catch(() => 'idle')) ||
+						'idle'
+				);
+				const legacyOpen =
+					Boolean(await joplin.settings.value(SettingKey.ExcludeNotebookPicker).catch(() => false)) ||
+					Boolean(await joplin.settings.value(SettingKey.OpenRestoreList).catch(() => false));
+				const shouldOpen = action === 'open' || legacyOpen;
+				if (shouldOpen) {
 					try {
 						await openExcludeNotebooksDialog();
 						await syncExcludedPathsDisplay();
 						await refreshExcludePickerSettings();
+					} catch (e) {
+						console.warn('Joplin Grok: open exclude dialog failed', e);
 					} finally {
-						await joplin.settings.setValue(SettingKey.OpenExcludeList, false);
-						await joplin.settings.setValue(SettingKey.ExcludeNotebookPicker, false);
-						await joplin.settings.setValue(SettingKey.OpenRestoreList, false);
+						try {
+							await joplin.settings.setValue(SettingKey.OpenExcludeList, 'idle');
+							await joplin.settings.setValue(SettingKey.ExcludeNotebookPicker, false);
+							await joplin.settings.setValue(SettingKey.OpenRestoreList, false);
+						} catch {
+							/* ignore */
+						}
 					}
 				}
 			}
