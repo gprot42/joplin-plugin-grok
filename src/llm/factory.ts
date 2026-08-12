@@ -39,7 +39,7 @@ export async function createProvider(settings: PluginSettings): Promise<LLMProvi
 			label: `OpenRouter (${resolved.source})`,
 			// OpenRouter optional ranking headers
 			extraHeaders: {
-				'HTTP-Referer': 'https://github.com/aicoder/joplin-grok',
+				'HTTP-Referer': 'https://github.com/gprot42/joplin-plugin-grok',
 				'X-Title': 'Joplin Grok AI Assistant',
 			},
 		});
