@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Build output (webpack / Joplin plugin archive)
+dist/
+publish/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# ── Secrets (never commit) ──────────────────────────────────────────
+# Project-local env files
+.env
+.env.*
+!.env.example
+
+# Accidental copies of Grok CLI / OAuth material (never commit these)
+.grok/
+auth.json
+**/auth.json
+api_key
+**/api_key
+**/*.pem
+secrets/
+credentials/
+*.credentials
+*.secret
+*.secrets
+
+# TypeScript / caches
+*.tsbuildinfo
+.cache/
+.turbo/
+coverage/
+.nyc_output/
+
+# Optional local tooling
+*.local
+.eslintcache

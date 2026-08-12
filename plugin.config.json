@@ -1,0 +1,6 @@
+{
+  "extraScripts": [
+    "ui/fabContentScript.ts",
+    "ui/viewerFabContentScript.ts"
+  ]
+}

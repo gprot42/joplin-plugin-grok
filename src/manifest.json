@@ -1,0 +1,16 @@
+{
+  "manifest_version": 1,
+  "id": "com.joplin-grok.ai-assistant",
+  "app_min_version": "2.13",
+  "version": "0.0.1",
+  "name": "Joplin Grok AI Assistant",
+  "description": "Chat with Grok or any OpenAI-compatible LLM to search, create, update, tag, and summarize notes — with smart notebook placement.",
+  "author": "joplin-grok",
+  "homepage_url": "https://github.com/gprot42/joplin-plugin-grok",
+  "repository_url": "https://github.com/gprot42/joplin-plugin-grok",
+  "keywords": ["ai", "grok", "llm", "assistant", "search"],
+  "categories": ["productivity", "personal knowledge management", "search"],
+  "screenshots": [],
+  "icons": {},
+  "promo_tile": {}
+}
